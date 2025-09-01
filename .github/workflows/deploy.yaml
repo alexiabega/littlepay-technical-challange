@@ -1,0 +1,105 @@
+name: Deploy to EKS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: littlepay
+  EKS_CLUSTER: littlepay
+  K8S_NAMESPACE: default
+
+jobs:
+  build-and-deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig \
+          --region ${{ env.AWS_REGION }} \
+          --name ${{ env.EKS_CLUSTER }}
+
+    - name: Deploy to EKS
+      run: |
+        cat > deployment.yaml << EOF
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: littlepay
+          namespace: ${{ env.K8S_NAMESPACE }}
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: littlepay
+          template:
+            metadata:
+              labels:
+                app: littlepay
+            spec:
+              containers:
+              - name: littlepay
+                image: ${{ steps.build-image.outputs.image }}
+                ports:
+                - containerPort: 5000
+                resources:
+                  requests:
+                    memory: "64Mi"
+                    cpu: "250m"
+                  limits:
+                    memory: "128Mi"
+                    cpu: "500m"
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 5000
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: littlepay
+          namespace: ${{ env.K8S_NAMESPACE }}
+        spec:
+          selector:
+            app: littlepay
+          ports:
+          - port: 80
+            targetPort: 5000
+          type: LoadBalancer
+        EOF
+
+        kubectl apply -f deployment.yaml
+
+        kubectl rollout status deployment/littlepay -n ${{ env.K8S_NAMESPACE }} --timeout=90s
