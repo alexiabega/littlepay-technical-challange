@@ -25,7 +25,7 @@
 
  Then run the script itself:
  ```bash
- ./setup-environment.sh
+ ./run-application.sh
  ```
 
  ### Option 3: Fully Automated Run
