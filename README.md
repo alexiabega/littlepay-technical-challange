@@ -27,3 +27,6 @@
  ```bash
  ./setup-environment.sh
  ```
+
+ ### Option 3: Fully Automated Run
+ This is a GitOps Approach, the only thing that the my teamates need to have to their local machine is access to this project and the EKS which this project is deployed to. Every time they push a change in the main branch, the workflow automatically builds the new image and pushes it to our ECR. After that it ensured a continious deployment in our cluster.
